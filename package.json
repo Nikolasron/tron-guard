@@ -1,0 +1,10 @@
+{
+  "name": "tron-approval-scanner",
+  "version": "1.0.0",
+  "description": "Scans TRON for dangerous approvals",
+  "main": "scan.js",
+  "dependencies": {
+    "tronweb": "^6.3.0",
+    "axios": "^1.7.0"
+  }
+}
