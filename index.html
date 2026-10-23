@@ -52,9 +52,26 @@
 </div>
 
 <script>
-    const tronWeb = new TronWeb({ fullHost: 'https://api.trongrid.io' });
+    // YOUR TRONGRID API KEY IS INSERTED HERE
+    const API_KEY = '6f24dc72-5eeb-4e05-a310-d5bb84c18f98'; 
+
     const TRONSCAN_API = 'https://apilist.tronscanapi.com';
     const USDT_CONTRACT = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+
+    // Configure TronWeb with API Key
+    const tronWeb = new TronWeb({ 
+        fullHost: 'https://api.trongrid.io',
+        headers: { "TRON-PRO-API-KEY": API_KEY }
+    });
+
+    // Configure Axios with API Key and 10-second Timeout
+    const axiosConfig = {
+        headers: { 
+            "TRON-PRO-API-KEY": API_KEY,
+            "Accept": "application/json"
+        },
+        timeout: 10000 
+    };
 
     const scannedOwners = new Set();
     const flaggedSpenders = new Set();
@@ -65,12 +82,16 @@
     
     const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-    window.onload = () => { setTimeout(liveScanLoop, 1000); };
+    window.onload = () => { 
+        updateStatus("✅ API Key loaded. Initializing...");
+        setTimeout(liveScanLoop, 1000);
+    };
 
     async function liveScanLoop() {
         try {
             updateStatus("Fetching latest live USDT transactions...");
-            const txRes = await axios.get(`${TRONSCAN_API}/api/token_trc20/transfers?limit=50&start=0&contract_address=${USDT_CONTRACT}`);
+            
+            const txRes = await axios.get(`${TRONSCAN_API}/api/token_trc20/transfers?limit=50&start=0&contract_address=${USDT_CONTRACT}`, axiosConfig);
             const transfers = txRes.data.token_transfers || [];
             
             const addressesToScan = new Set();
@@ -94,14 +115,14 @@
                 scannedOwners.add(owner);
                 updateStatus(`Scanning: ${owner.substring(0, 8)}... (${i+1}/${newAddresses.length})`);
                 await checkApprovalsForOwner(owner);
-                await sleep(250);
+                await sleep(150); 
             }
             
             updateStatus("Batch complete. Fetching new transactions in 15 seconds...");
             setTimeout(liveScanLoop, 15000);
 
         } catch (err) {
-            updateStatus(`⚠️ Error: ${err.message}. Retrying in 15s...`);
+            updateStatus(`⚠️ Network Error: ${err.message}. Retrying in 15s...`);
             setTimeout(liveScanLoop, 15000);
         }
     }
@@ -114,7 +135,7 @@
 
     async function checkApprovalsForOwner(owner) {
         try {
-            const approveRes = await axios.get(`${TRONSCAN_API}/api/account/approve/list?address=${owner}&limit=100&start=0&type=token`);
+            const approveRes = await axios.get(`${TRONSCAN_API}/api/account/approve/list?address=${owner}&limit=100&start=0&type=token`, axiosConfig);
             const approvals = approveRes.data.data || [];
 
             const activeApprovals = approvals.filter(a => {
@@ -132,6 +153,7 @@
                 if (flaggedSpenders.has(pairId)) continue;
                 
                 try {
+                    // This call uses the TronGrid API key
                     const contractInfo = await tronWeb.trx.getContractInfo(spender);
                     const abi = contractInfo.abi ? contractInfo.abi.entrys : null;
                     
@@ -156,10 +178,14 @@
                         renderCard(owner, spender, app, "DANGEROUS DRAINER FUNCTION DETECTED", funcSignature);
                     }
 
-                } catch (err) {}
-                await sleep(150);
+                } catch (err) {
+                    // Ignore contract errors and keep scanning
+                }
+                await sleep(100);
             }
-        } catch (e) {}
+        } catch (e) {
+            // Ignore owner errors and keep scanning
+        }
     }
 
     function renderCard(owner, spender, app, reason, funcSignature) {
