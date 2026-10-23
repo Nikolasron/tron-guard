@@ -22,7 +22,7 @@
         .pulse { width: 8px; height: 8px; background-color: white; border-radius: 50%; animation: pulse 1.5s infinite; }
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
         
-        .status { margin-bottom: 20px; font-family: monospace; color: var(--success); font-size: 14px; background: #000; padding: 10px; border-radius: 6px; border: 1px solid var(--border);}
+        .status { margin-bottom: 20px; font-family: monospace; color: var(--success); font-size: 14px; background: #000; padding: 10px; border-radius: 6px; border: 1px solid var(--border); word-break: break-all;}
         
         .card { background-color: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); animation: slideIn 0.3s ease-out; }
         @keyframes slideIn { from { transform: translateY(-10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
@@ -52,26 +52,21 @@
 </div>
 
 <script>
-    // YOUR TRONGRID API KEY IS INSERTED HERE
+    // TronGrid API Key (ONLY for reading smart contracts)
     const API_KEY = '6f24dc72-5eeb-4e05-a310-d5bb84c18f98'; 
-
-    const TRONSCAN_API = 'https://apilist.tronscanapi.com';
     const USDT_CONTRACT = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
 
-    // Configure TronWeb with API Key
+    // 1. TronWeb uses the API Key for TronGrid
     const tronWeb = new TronWeb({ 
         fullHost: 'https://api.trongrid.io',
         headers: { "TRON-PRO-API-KEY": API_KEY }
     });
 
-    // Configure Axios with API Key and 10-second Timeout
-    const axiosConfig = {
-        headers: { 
-            "TRON-PRO-API-KEY": API_KEY,
-            "Accept": "application/json"
-        },
-        timeout: 10000 
-    };
+    // 2. Axios for TronScan (NO API KEY, shorter timeout to fail fast)
+    const tronscanAxios = axios.create({
+        timeout: 5000,
+        headers: { "Accept": "application/json" }
+    });
 
     const scannedOwners = new Set();
     const flaggedSpenders = new Set();
@@ -83,15 +78,14 @@
     const sleep = ms => new Promise(r => setTimeout(r, ms));
 
     window.onload = () => { 
-        updateStatus("✅ API Key loaded. Initializing...");
-        setTimeout(liveScanLoop, 1000);
+        updateStatus("✅ System ready. Fetching live feed...");
+        setTimeout(liveScanLoop, 500);
     };
 
     async function liveScanLoop() {
         try {
-            updateStatus("Fetching latest live USDT transactions...");
-            
-            const txRes = await axios.get(`${TRONSCAN_API}/api/token_trc20/transfers?limit=50&start=0&contract_address=${USDT_CONTRACT}`, axiosConfig);
+            // Fetch 20 instead of 50 for faster load
+            const txRes = await tronscanAxios.get(`https://apilist.tronscanapi.com/api/token_trc20/transfers?limit=20&start=0&contract_address=${USDT_CONTRACT}`);
             const transfers = txRes.data.token_transfers || [];
             
             const addressesToScan = new Set();
@@ -103,8 +97,8 @@
             const newAddresses = Array.from(addressesToScan).filter(addr => !scannedOwners.has(addr));
             
             if (newAddresses.length === 0) {
-                updateStatus("No new wallets found. Waiting 15 seconds for next batch...");
-                setTimeout(liveScanLoop, 15000);
+                updateStatus("No new wallets found. Waiting 10 seconds...");
+                setTimeout(liveScanLoop, 10000);
                 return;
             }
 
@@ -113,17 +107,17 @@
             for (let i = 0; i < newAddresses.length; i++) {
                 const owner = newAddresses[i];
                 scannedOwners.add(owner);
-                updateStatus(`Scanning: ${owner.substring(0, 8)}... (${i+1}/${newAddresses.length})`);
+                updateStatus(`Scanning wallet: ${owner.substring(0, 10)}... (${i+1}/${newAddresses.length})`);
                 await checkApprovalsForOwner(owner);
-                await sleep(150); 
+                await sleep(100); // Very fast scan
             }
             
-            updateStatus("Batch complete. Fetching new transactions in 15 seconds...");
-            setTimeout(liveScanLoop, 15000);
+            updateStatus("Batch complete. Fetching next batch in 10s...");
+            setTimeout(liveScanLoop, 10000);
 
         } catch (err) {
-            updateStatus(`⚠️ Network Error: ${err.message}. Retrying in 15s...`);
-            setTimeout(liveScanLoop, 15000);
+            updateStatus(`⚠️ TronScan Timeout. Retrying...`);
+            setTimeout(liveScanLoop, 5000);
         }
     }
 
@@ -135,7 +129,7 @@
 
     async function checkApprovalsForOwner(owner) {
         try {
-            const approveRes = await axios.get(`${TRONSCAN_API}/api/account/approve/list?address=${owner}&limit=100&start=0&type=token`, axiosConfig);
+            const approveRes = await tronscanAxios.get(`https://apilist.tronscanapi.com/api/account/approve/list?address=${owner}&limit=100&start=0&type=token`);
             const approvals = approveRes.data.data || [];
 
             const activeApprovals = approvals.filter(a => {
@@ -153,7 +147,7 @@
                 if (flaggedSpenders.has(pairId)) continue;
                 
                 try {
-                    // This call uses the TronGrid API key
+                    // TronWeb uses the TronGrid API key here
                     const contractInfo = await tronWeb.trx.getContractInfo(spender);
                     const abi = contractInfo.abi ? contractInfo.abi.entrys : null;
                     
@@ -178,14 +172,10 @@
                         renderCard(owner, spender, app, "DANGEROUS DRAINER FUNCTION DETECTED", funcSignature);
                     }
 
-                } catch (err) {
-                    // Ignore contract errors and keep scanning
-                }
-                await sleep(100);
+                } catch (err) {}
+                await sleep(50);
             }
-        } catch (e) {
-            // Ignore owner errors and keep scanning
-        }
+        } catch (e) {}
     }
 
     function renderCard(owner, spender, app, reason, funcSignature) {
