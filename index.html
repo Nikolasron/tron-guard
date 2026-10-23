@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TRON Live Drainer Scanner</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tronweb@6.0.0/dist/TronWeb.js"></script>
+    <style>
+        :root {
+            --bg: #0d1117; --panel: #161b22; --text: #c9d1d9;
+            --danger: #f85149; --danger-bg: rgba(248, 81, 73, 0.1);
+            --border: #30363d; --success: #2ea043; --primary: #238636;
+        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; background-color: var(--bg); color: var(--text); margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        .container { width: 100%; max-width: 850px; }
+        
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 15px; }
+        h1 { color: #fff; font-size: 22px; margin: 0; }
+        
+        .live-badge { background-color: var(--danger); color: white; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: bold; display: flex; align-items: center; gap: 5px; }
+        .pulse { width: 8px; height: 8px; background-color: white; border-radius: 50%; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
+        
+        .status { margin-bottom: 20px; font-family: monospace; color: var(--success); font-size: 14px; background: #000; padding: 10px; border-radius: 6px; border: 1px solid var(--border);}
+        
+        .card { background-color: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); animation: slideIn 0.3s ease-out; }
+        @keyframes slideIn { from { transform: translateY(-10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        
+        .danger-card { border-left: 4px solid var(--danger); background-color: var(--danger-bg); }
+        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+        .badge { background-color: var(--danger); color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+        .data-row { margin-bottom: 8px; font-size: 14px; line-height: 1.4; }
+        .data-row strong { color: #8b949e; display: inline-block; width: 130px; }
+        a { color: #58a6ff; text-decoration: none; word-break: break-all; }
+        a:hover { text-decoration: underline; }
+        .func-code { background: #000; color: #2ea043; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px; }
+        .allowance-val { color: #e3b341; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>🛡️ TRON Live Drainer Scanner</h1>
+        <div class="live-badge"><div class="pulse"></div> LIVE SCANNING</div>
+    </div>
+    
+    <div id="status" class="status">Initializing live network feed...</div>
+    
+    <div id="results"></div>
+</div>
+
+<script>
+    const tronWeb = new TronWeb({ fullHost: 'https://api.trongrid.io' });
+    const TRONSCAN_API = 'https://apilist.tronscanapi.com';
+    const USDT_CONTRACT = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+
+    const scannedOwners = new Set();
+    const flaggedSpenders = new Set();
+
+    function updateStatus(msg) { 
+        document.getElementById('status').innerText = `> ${msg}`; 
+    }
+    
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+    window.onload = () => { setTimeout(liveScanLoop, 1000); };
+
+    async function liveScanLoop() {
+        try {
+            updateStatus("Fetching latest live USDT transactions...");
+            const txRes = await axios.get(`${TRONSCAN_API}/api/token_trc20/transfers?limit=50&start=0&contract_address=${USDT_CONTRACT}`);
+            const transfers = txRes.data.token_transfers || [];
+            
+            const addressesToScan = new Set();
+            transfers.forEach(tx => {
+                if (tx.from_address) addressesToScan.add(tx.from_address);
+                if (tx.to_address) addressesToScan.add(tx.to_address);
+            });
+
+            const newAddresses = Array.from(addressesToScan).filter(addr => !scannedOwners.has(addr));
+            
+            if (newAddresses.length === 0) {
+                updateStatus("No new wallets found. Waiting 15 seconds for next batch...");
+                setTimeout(liveScanLoop, 15000);
+                return;
+            }
+
+            updateStatus(`Analyzing ${newAddresses.length} new active wallets...`);
+
+            for (let i = 0; i < newAddresses.length; i++) {
+                const owner = newAddresses[i];
+                scannedOwners.add(owner);
+                updateStatus(`Scanning: ${owner.substring(0, 8)}... (${i+1}/${newAddresses.length})`);
+                await checkApprovalsForOwner(owner);
+                await sleep(250);
+            }
+            
+            updateStatus("Batch complete. Fetching new transactions in 15 seconds...");
+            setTimeout(liveScanLoop, 15000);
+
+        } catch (err) {
+            updateStatus(`⚠️ Error: ${err.message}. Retrying in 15s...`);
+            setTimeout(liveScanLoop, 15000);
+        }
+    }
+
+    function hasActiveAllowance(val) {
+        if (!val) return false;
+        if (typeof val === 'string' && val.toLowerCase().includes('unlimited')) return true;
+        try { return BigInt(val) > 0n; } catch { return false; }
+    }
+
+    async function checkApprovalsForOwner(owner) {
+        try {
+            const approveRes = await axios.get(`${TRONSCAN_API}/api/account/approve/list?address=${owner}&limit=100&start=0&type=token`);
+            const approvals = approveRes.data.data || [];
+
+            const activeApprovals = approvals.filter(a => {
+                const rawVal = a.allowance || a.value || a.amount || '0';
+                return hasActiveAllowance(rawVal);
+            });
+
+            if (activeApprovals.length === 0) return; 
+
+            for (const app of activeApprovals) {
+                const spender = app.spender || app.approved_address;
+                if (!spender) continue;
+
+                const pairId = `${owner}-${spender}`;
+                if (flaggedSpenders.has(pairId)) continue;
+                
+                try {
+                    const contractInfo = await tronWeb.trx.getContractInfo(spender);
+                    const abi = contractInfo.abi ? contractInfo.abi.entrys : null;
+                    
+                    if (!abi) {
+                        flaggedSpenders.add(pairId);
+                        renderCard(owner, spender, app, "UNVERIFIED CONTRACT (No ABI)", "Unknown");
+                        continue;
+                    }
+
+                    const dangerousFunction = abi.find(item => {
+                        if (!item.inputs || item.inputs.length < 3) return false;
+                        const isDangerousName = ['transferFrom', 'withdraw', 'withdrawERC20', 'safeTransferFrom'].includes(item.name);
+                        const addressCount = item.inputs.filter(i => i.type === 'address').length;
+                        const hasUint = item.inputs.some(i => i.type.startsWith('uint'));
+                        return isDangerousName && addressCount >= 2 && hasUint;
+                    });
+
+                    if (dangerousFunction) {
+                        flaggedSpenders.add(pairId);
+                        const inputTypes = dangerousFunction.inputs.map(i => i.type).join(',');
+                        const funcSignature = `${dangerousFunction.name}(${inputTypes})`;
+                        renderCard(owner, spender, app, "DANGEROUS DRAINER FUNCTION DETECTED", funcSignature);
+                    }
+
+                } catch (err) {}
+                await sleep(150);
+            }
+        } catch (e) {}
+    }
+
+    function renderCard(owner, spender, app, reason, funcSignature) {
+        const div = document.createElement('div');
+        div.className = 'card danger-card';
+        
+        const rawAllowance = app.allowance || app.value || app.amount || 'Unlimited';
+        const isUnlimited = String(rawAllowance).toLowerCase().includes('unlimited') || String(rawAllowance).length > 20;
+
+        div.innerHTML = `
+            <div class="card-header">
+                <span>🚨 HIGH RISK SPENDER</span>
+                <span class="badge">${isUnlimited ? 'UNLIMITED' : 'ALLOWANCE > 0'}</span>
+            </div>
+            <div class="data-row"><strong>Owner (Victim):</strong> <a href="https://tronscan.org/#/address/${owner}" target="_blank">${owner}</a></div>
+            <div class="data-row"><strong>Spender (Drainer):</strong> <a href="https://tronscan.org/#/contract/${spender}/write" target="_blank" style="color: var(--danger)">${spender}</a></div>
+            <div class="data-row"><strong>Token:</strong> ${app.tokenSymbol || 'Unknown'}</div>
+            <div class="data-row"><strong>Allowance:</strong> <span class="allowance-val">${rawAllowance}</span></div>
+            <div class="data-row"><strong>Reason:</strong> <span style="color: var(--danger)">${reason}</span></div>
+            ${funcSignature !== 'Unknown' ? `<div class="data-row"><strong>Function:</strong> <span class="func-code">${funcSignature}</span></div>` : ''}
+        `;
+        
+        const resultsDiv = document.getElementById('results');
+        resultsDiv.insertBefore(div, resultsDiv.firstChild);
+    }
+</script>
+</body>
+</html>
