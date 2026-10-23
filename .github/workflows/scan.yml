@@ -1,25 +1,19 @@
 name: TRON Auto Approval Scanner
-
 on:
   schedule:
-    - cron: '0 */4 * * *' # Runs every 4 hours
-  workflow_dispatch: # Allows you to click a button to run it manually
-
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
 jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
       - name: Install dependencies
         run: npm install
-
       - name: Run scanner
         run: node scan.js
-        
